@@ -117,6 +117,22 @@ if [[ "${1:-}" == "--test-notification" ]]; then
     exit 0
 fi
 
+if [[ "${1:-}" == "--test-templates" ]]; then
+    test_ok=0
+    send_qywx "月度流量统计（上月）" "统计月份：2026-08\n上月总出站流量：82.40 GiB\n计量月份已重置：2026-09\n统计口径：Google Cloud 计量月\n新计量月已解除入站保护，SSH 之外的入站连接恢复" 82.40 "已限制"
+    [[ "${QYWX_LAST_STATUS:-0}" == 0 ]] && ((test_ok+=1))
+    send_qywx "流量告警" "月份：2026-08\n告警阈值：150 GiB\n保护阈值：180 GiB" 152.35 "告警"
+    [[ "${QYWX_LAST_STATUS:-0}" == 0 ]] && ((test_ok+=1))
+    send_qywx "流量保护已触发" "月份：2026-08\n已达到保护阈值：180 GiB\n动作：关闭除 SSH 外的入站连接" 181.72 "已限制"
+    [[ "${QYWX_LAST_STATUS:-0}" == 0 ]] && ((test_ok+=1))
+    if [[ "$test_ok" == 3 ]]; then
+        echo "3 个通知模板测试发送成功，请在企业微信中确认。"
+        exit 0
+    fi
+    echo "通知模板测试部分失败：${test_ok}/3，请查看 journalctl -t gcp-egress-guard" >&2
+    exit 1
+fi
+
 [[ $EUID -eq 0 ]] || die "must run as root"
 [[ "$INTERFACE" =~ ^[A-Za-z0-9_.:-]+$ ]] || die "invalid interface"
 [[ -r "/sys/class/net/$INTERFACE/statistics/tx_bytes" ]] || die "interface not found: $INTERFACE"
