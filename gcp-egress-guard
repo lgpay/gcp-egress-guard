@@ -77,7 +77,7 @@ try:
     traffic = f"{float(value):.2f}GB"
 except ValueError:
     traffic = "0.00GB"
-full_title = f"已使用{traffic} - {title}"
+full_title = title
 description = (
     f"{instance}（{public_ip}）\n"
     f"{bar} {pct:.2f}%\n"
@@ -119,7 +119,7 @@ fi
 
 if [[ "${1:-}" == "--test-templates" ]]; then
     test_ok=0
-    send_qywx "月度流量统计（上月）" "统计月份：2026-08\n上月总出站流量：82.40 GiB\n计量月份已重置：2026-09\n统计口径：Google Cloud 计量月\n新计量月已解除入站保护，SSH 之外的入站连接恢复" 82.40 "已限制"
+    send_qywx "月度流量统计（8月）" "统计月份：8月\n上月总流量：82.40 GiB" 82.40 "已重置"
     [[ "${QYWX_LAST_STATUS:-0}" == 0 ]] && ((test_ok+=1))
     send_qywx "流量告警" "月份：2026-08\n告警阈值：150 GiB\n保护阈值：180 GiB" 152.35 "告警"
     [[ "${QYWX_LAST_STATUS:-0}" == 0 ]] && ((test_ok+=1))
@@ -191,12 +191,11 @@ if [[ "${old_month:-}" != "$month" ]]; then
     if [[ -n "$previous_month" ]]; then
         previous_total_gib=$(awk -v n="${total:-0}" 'BEGIN { printf "%.2f", n/1073741824 }')
         previous_inbound_status=正常
-        [[ "${triggered:-0}" == 1 ]] && previous_inbound_status=已限制
-        previous_month_message="统计月份：$previous_month\n上月总出站流量：${previous_total_gib} GiB\n计量月份已重置：$month\n统计口径：Google Cloud 计量月"
-        if [[ "${triggered:-0}" == 1 ]]; then
-            previous_month_message+="\n新计量月已解除入站保护，SSH 之外的入站连接恢复"
-        fi
-        send_qywx "月度流量统计（上月）" "$previous_month_message" "$previous_total_gib" "$previous_inbound_status"
+        [[ "${triggered:-0}" == 1 ]] && previous_inbound_status=已重置
+        previous_month_num="${previous_month##*-}"
+        previous_month_num=$((10#$previous_month_num))
+        previous_month_message="统计月份：${previous_month_num}月\n上月总流量：${previous_total_gib} GiB"
+        send_qywx "月度流量统计（${previous_month_num}月）" "$previous_month_message" "$previous_total_gib" "$previous_inbound_status"
     fi
     if [[ "${old_month:-}" != "" && "${triggered:-0}" == 1 ]]; then
         remove_inbound_block
