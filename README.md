@@ -4,6 +4,17 @@
 
 它直接读取指定网卡的 TX 字节数，不依赖 vnStat、CDN IP 列表或 `gcp_free` 项目。
 
+## 目录布局
+
+| 路径 | 用途 |
+| --- | --- |
+| `/usr/local/sbin/gcp-egress-guard` | 执行程序 |
+| `/etc/gcp-egress-guard/config` | 私有配置，包含企业微信 Secret |
+| `/var/lib/gcp-egress-guard/` | 月度统计和通知去重状态 |
+| `journalctl -t gcp-egress-guard` | 运行日志 |
+
+旧版 `/etc/default/gcp-egress-guard` 会在安装升级时自动迁移并保留备份。
+
 ## 功能
 
 - 每 5 分钟统计网卡出站流量

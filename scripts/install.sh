@@ -8,8 +8,14 @@ install -D -m 0644 "$ROOT_DIR/systemd/gcp-egress-guard.timer" /etc/systemd/syste
 
 install -d -m 0700 /etc/gcp-egress-guard
 if [[ ! -e /etc/gcp-egress-guard/config ]]; then
-    install -D -m 0600 "$ROOT_DIR/config/gcp-egress-guard.example" /etc/gcp-egress-guard/config
-    echo "Created /etc/gcp-egress-guard/config; edit it before enabling notifications."
+    if [[ -e /etc/default/gcp-egress-guard ]]; then
+        install -m 0600 /etc/default/gcp-egress-guard /etc/gcp-egress-guard/config
+        mv /etc/default/gcp-egress-guard /etc/default/gcp-egress-guard.migrated-backup
+        echo "Migrated /etc/default/gcp-egress-guard to /etc/gcp-egress-guard/config."
+    else
+        install -D -m 0600 "$ROOT_DIR/config/gcp-egress-guard.example" /etc/gcp-egress-guard/config
+        echo "Created /etc/gcp-egress-guard/config; edit it before enabling notifications."
+    fi
 else
     echo "Keeping existing /etc/gcp-egress-guard/config."
 fi
