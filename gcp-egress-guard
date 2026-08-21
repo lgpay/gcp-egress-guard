@@ -132,9 +132,9 @@ if [[ "${1:-}" == "--test-templates" ]]; then
     test_ok=0
     send_qywx "8月流量统计" "8月总流量: 82.40 GiB" 82.40 "已恢复正常" "monthly"
     [[ "${QYWX_LAST_STATUS:-0}" == 0 ]] && ((test_ok+=1))
-    send_qywx "流量告警" "月份：2026-08\n告警阈值：150 GiB\n保护阈值：180 GiB" 152.35 "告警"
+    send_qywx "流量告警" "⚠️本月入站流量达到180GiB后，将关闭入站链接" 152.35 "正常"
     [[ "${QYWX_LAST_STATUS:-0}" == 0 ]] && ((test_ok+=1))
-    send_qywx "流量保护已触发" "月份：2026-08\n已达到保护阈值：180 GiB\n动作：关闭除 SSH 外的入站连接" 181.72 "已限制"
+    send_qywx "流量保护触发" "🛑本月达到180GiB限值，已经关闭除 SSH 外的入站连接，将在下月重新恢复正常。" 181.72 "已限制"
     [[ "${QYWX_LAST_STATUS:-0}" == 0 ]] && ((test_ok+=1))
     if [[ "$test_ok" == 3 ]]; then
         echo "3 个通知模板测试发送成功，请在企业微信中确认。"
@@ -286,7 +286,7 @@ mv -f "$STATE_TMP" "$STATE_FILE"
 if awk -v n="$total_gib" -v w="$WARN_GIB" 'BEGIN { exit !(n >= w) }'; then
     logger -t "$LOG_TAG" -p user.warning -- "monthly egress reached ${total_gib} GiB (warning threshold ${WARN_GIB} GiB)" || true
     if [[ "${warn_notified:-0}" != 1 ]]; then
-        send_qywx "流量告警" "月份：$month\n告警阈值：${WARN_GIB} GiB\n保护阈值：${LIMIT_GIB} GiB" "$total_gib" "告警"
+        send_qywx "流量告警" "⚠️本月入站流量达到180GiB后，将关闭入站链接" "$total_gib" "正常"
         sed -i "s/^warn_notified=.*/warn_notified='1'/" "$STATE_FILE"
     fi
 fi
@@ -298,7 +298,7 @@ fi
 if [[ "${triggered:-0}" != 1 ]] && awk -v n="$total_gib" -v l="$LIMIT_GIB" 'BEGIN { exit !(n >= l) }'; then
     sed -i "s/^triggered=.*/triggered='1'/" "$STATE_FILE"
     info "monthly egress limit reached: ${total_gib} GiB; action=$ACTION"
-    send_qywx "流量保护已触发" "月份：$month\n已达到保护阈值：${LIMIT_GIB} GiB\n动作：关闭除 SSH 外的入站连接" "$total_gib" "已限制"
+    send_qywx "流量保护触发" "🛑本月达到180GiB限值，已经关闭除 SSH 外的入站连接，将在下月重新恢复正常。" "$total_gib" "已限制"
     if [[ "$ACTION" == block ]]; then
         apply_inbound_block
     elif [[ "$ACTION" == shutdown ]]; then
