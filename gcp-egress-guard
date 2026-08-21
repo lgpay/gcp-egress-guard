@@ -172,6 +172,12 @@ fi
 
 if [[ "${old_month:-}" != "$month" ]]; then
     previous_month="${old_month:-}"
+    if [[ -n "$previous_month" ]]; then
+        previous_total_gib=$(awk -v n="${total:-0}" 'BEGIN { printf "%.2f", n/1073741824 }')
+        previous_inbound_status=正常
+        [[ "${triggered:-0}" == 1 ]] && previous_inbound_status=已限制
+        send_qywx "月度流量统计（上月）" "统计月份：$previous_month\n上月总出站流量：${previous_total_gib} GiB\n计量月份已重置：$month\n统计口径：Google Cloud 计量月" "$previous_total_gib" "$previous_inbound_status"
+    fi
     if [[ "${old_month:-}" != "" && "${triggered:-0}" == 1 ]]; then
         remove_inbound_block
         info "new month detected; inbound protection removed"
