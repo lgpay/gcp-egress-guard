@@ -95,8 +95,8 @@ else:
         f"已使用流量: {traffic} / {float(limit):g}GB\n"
         f"实例地区: {zone}\n"
         f"实例ID: {instance_name}\n"
-        f"入站状态: {status}\n"
-        f"{message}"
+        f"入站状态: {status}"
+        + (f"\n{message}" if message else "")
     )
 print(json.dumps({"touser": touser, "msgtype": "news", "agentid": int(agentid), "news": {"articles": [{"title": full_title, "description": description[:512], "url": "", "picurl": picurl}]}, "enable_id_trans": 0, "enable_duplicate_check": 0, "duplicate_check_interval": 1800}, ensure_ascii=False))
 PY
@@ -254,17 +254,17 @@ if [[ "$beijing_hour" == 10 ]]; then
     case "$beijing_day" in
         15)
             if [[ "${notify_15_key:-}" != "$beijing_date" ]]; then
-                send_qywx "月度流量提醒（15日）" "月份：$month\n提醒日期：$beijing_date\n统计时间：北京时间 10:00\n当前月累计流量：${total_gib} GiB" "$total_gib" "$inbound_status"
+                send_qywx "GCP流量统计" "" "$total_gib" "$inbound_status"
                 [[ "${QYWX_LAST_STATUS:-0}" == 0 ]] && notify_15_key=$beijing_date
             fi ;;
         20)
             if [[ "${notify_20_key:-}" != "$beijing_date" ]]; then
-                send_qywx "月度流量提醒（20日）" "月份：$month\n提醒日期：$beijing_date\n统计时间：北京时间 10:00\n当前月累计流量：${total_gib} GiB" "$total_gib" "$inbound_status"
+                send_qywx "GCP流量统计" "" "$total_gib" "$inbound_status"
                 [[ "${QYWX_LAST_STATUS:-0}" == 0 ]] && notify_20_key=$beijing_date
             fi ;;
         25)
             if [[ "${notify_25_key:-}" != "$beijing_date" ]]; then
-                send_qywx "月度流量提醒（25日）" "月份：$month\n提醒日期：$beijing_date\n统计时间：北京时间 10:00\n当前月累计流量：${total_gib} GiB" "$total_gib" "$inbound_status"
+                send_qywx "GCP流量统计" "" "$total_gib" "$inbound_status"
                 [[ "${QYWX_LAST_STATUS:-0}" == 0 ]] && notify_25_key=$beijing_date
             fi ;;
     esac
