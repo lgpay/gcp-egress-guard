@@ -34,6 +34,7 @@ send_qywx() {
     local message="$2"
     local progress_gib="${3:-0}"
     local status="${4:-正常}"
+    local layout="${5:-standard}"
     # Call sites use readable \n separators; convert them to real newlines
     # before building the JSON payload.
     message=${message//\\n/$'\n'}
@@ -52,18 +53,18 @@ send_qywx() {
     access_token=$(printf '%s' "$token_response" | python3 -c \
         'import json,sys; print(json.load(sys.stdin).get("access_token", ""))' 2>/dev/null) || access_token=
     [[ -n "$access_token" ]] || { info "企业微信通知失败：获取 access_token 失败"; QYWX_LAST_STATUS=1; return 0; }
-    local public_ip zone instance_name
+    local public_ip zone instance_name server_label
     public_ip=$(curl -fsS --connect-timeout 3 --max-time 5 -H 'Metadata-Flavor: Google' \
         'http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip' 2>/dev/null || printf '%s' '-')
     zone=$(curl -fsS --connect-timeout 3 --max-time 5 -H 'Metadata-Flavor: Google' \
         'http://metadata.google.internal/computeMetadata/v1/instance/zone' 2>/dev/null || printf '%s' '-')
     zone="${zone##*/}"
-    instance_name="${SERVER_NAME:-}"
-    [[ -n "$instance_name" ]] || instance_name=$(curl -fsS --connect-timeout 3 --max-time 5 -H 'Metadata-Flavor: Google' \
+    instance_name=$(curl -fsS --connect-timeout 3 --max-time 5 -H 'Metadata-Flavor: Google' \
         'http://metadata.google.internal/computeMetadata/v1/instance/name' 2>/dev/null || hostname)
-    payload=$(python3 - "$title" "$message" "$QYWX_TOUSER" "$QYWX_AGENT_ID" "$QYWX_PIC_URL" "$progress_gib" "$QUOTA_GIB" "$instance_name" "$public_ip" "$zone" "$status" <<'PY'
+    server_label="${SERVER_NAME:-$instance_name}"
+    payload=$(python3 - "$title" "$message" "$QYWX_TOUSER" "$QYWX_AGENT_ID" "$QYWX_PIC_URL" "$progress_gib" "$QUOTA_GIB" "$server_label" "$public_ip" "$zone" "$status" "$instance_name" "$layout" <<'PY'
 import json, sys
-title, message, touser, agentid, picurl, value, limit, instance, public_ip, zone, status = sys.argv[1:]
+title, message, touser, agentid, picurl, value, limit, server_label, public_ip, zone, status, instance_name, layout = sys.argv[1:]
 try:
     pct = max(0, min(100, float(value) / float(limit) * 100))
 except (ValueError, ZeroDivisionError):
@@ -78,15 +79,25 @@ try:
 except ValueError:
     traffic = "0.00GB"
 full_title = title
-description = (
-    f"{instance}（{public_ip}）\n"
-    f"{bar} {pct:.2f}%\n"
-    f"已使用流量: {traffic} / {float(limit):g}GB\n"
-    f"实例地区: {zone}\n"
-    f"实例ID: {instance}\n"
-    f"入站状态: {status}\n"
-    f"{message}"
-)
+if layout == "monthly":
+    description = (
+        f"{server_label}（{public_ip}）\n"
+        f"{bar} {pct:.2f}%\n"
+        f"{message}\n"
+        f"实例地区: {zone}\n"
+        f"实例名称: {instance_name}\n"
+        f"入站状态: {status}"
+    )
+else:
+    description = (
+        f"{server_label}（{public_ip}）\n"
+        f"{bar} {pct:.2f}%\n"
+        f"已使用流量: {traffic} / {float(limit):g}GB\n"
+        f"实例地区: {zone}\n"
+        f"实例ID: {instance_name}\n"
+        f"入站状态: {status}\n"
+        f"{message}"
+    )
 print(json.dumps({"touser": touser, "msgtype": "news", "agentid": int(agentid), "news": {"articles": [{"title": full_title, "description": description[:512], "url": "", "picurl": picurl}]}, "enable_id_trans": 0, "enable_duplicate_check": 0, "duplicate_check_interval": 1800}, ensure_ascii=False))
 PY
     ) || { info "企业微信通知失败：无法生成 JSON"; QYWX_LAST_STATUS=1; return 0; }
@@ -119,7 +130,7 @@ fi
 
 if [[ "${1:-}" == "--test-templates" ]]; then
     test_ok=0
-    send_qywx "月度流量统计（8月）" "统计月份：8月\n上月总流量：82.40 GiB" 82.40 "已重置"
+    send_qywx "8月流量统计" "8月总流量: 82.40 GiB" 82.40 "已恢复正常" "monthly"
     [[ "${QYWX_LAST_STATUS:-0}" == 0 ]] && ((test_ok+=1))
     send_qywx "流量告警" "月份：2026-08\n告警阈值：150 GiB\n保护阈值：180 GiB" 152.35 "告警"
     [[ "${QYWX_LAST_STATUS:-0}" == 0 ]] && ((test_ok+=1))
@@ -191,11 +202,11 @@ if [[ "${old_month:-}" != "$month" ]]; then
     if [[ -n "$previous_month" ]]; then
         previous_total_gib=$(awk -v n="${total:-0}" 'BEGIN { printf "%.2f", n/1073741824 }')
         previous_inbound_status=正常
-        [[ "${triggered:-0}" == 1 ]] && previous_inbound_status=已重置
+        [[ "${triggered:-0}" == 1 ]] && previous_inbound_status=已恢复正常
         previous_month_num="${previous_month##*-}"
         previous_month_num=$((10#$previous_month_num))
-        previous_month_message="统计月份：${previous_month_num}月\n上月总流量：${previous_total_gib} GiB"
-        send_qywx "月度流量统计（${previous_month_num}月）" "$previous_month_message" "$previous_total_gib" "$previous_inbound_status"
+        previous_month_message="${previous_month_num}月总流量: ${previous_total_gib} GiB"
+        send_qywx "${previous_month_num}月流量统计" "$previous_month_message" "$previous_total_gib" "$previous_inbound_status" "monthly"
     fi
     if [[ "${old_month:-}" != "" && "${triggered:-0}" == 1 ]]; then
         remove_inbound_block
