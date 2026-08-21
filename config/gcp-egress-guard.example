@@ -1,3 +1,4 @@
+# Copy this file to /etc/gcp-egress-guard/config.
 # Network interface used by the VM.
 INTERFACE=ens4
 

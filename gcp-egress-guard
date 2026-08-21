@@ -1,7 +1,7 @@
 #!/bin/bash
 set -Eeuo pipefail
 
-CONFIG=/etc/default/gcp-egress-guard
+CONFIG=/etc/gcp-egress-guard/config
 STATE_DIR=/var/lib/gcp-egress-guard
 STATE_FILE="$STATE_DIR/state"
 STATE_TMP="$STATE_DIR/.state.$$"

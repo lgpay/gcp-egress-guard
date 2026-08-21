@@ -24,14 +24,14 @@
 git clone https://github.com/lgpay/gcp-egress-guard.git
 cd gcp-egress-guard
 sudo bash scripts/install.sh
-sudoedit /etc/default/gcp-egress-guard
+sudoedit /etc/gcp-egress-guard/config
 ```
 
-安装脚本不会覆盖已有的 `/etc/default/gcp-egress-guard`。
+安装脚本不会覆盖已有的 `/etc/gcp-egress-guard/config`。
 
 ## 企业微信应用配置
 
-在 `/etc/default/gcp-egress-guard` 填写：
+在 `/etc/gcp-egress-guard/config` 填写：
 
 ```bash
 QYWX_CORP_ID='企业ID'

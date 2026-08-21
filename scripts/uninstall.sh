@@ -6,4 +6,4 @@ rm -f /etc/systemd/system/gcp-egress-guard.timer /etc/systemd/system/gcp-egress-
 rm -f /usr/local/sbin/gcp-egress-guard
 systemctl daemon-reload
 echo "Removed the service, timer, and executable."
-echo "Kept /etc/default/gcp-egress-guard and /var/lib/gcp-egress-guard for recovery."
+echo "Kept /etc/gcp-egress-guard and /var/lib/gcp-egress-guard for recovery."
