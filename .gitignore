@@ -1,0 +1,9 @@
+# Local/private configuration and runtime state
+config/gcp-egress-guard
+*.local
+.env
+state
+
+# Editor/OS files
+.DS_Store
+*~

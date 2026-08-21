@@ -1,0 +1,28 @@
+# Network interface used by the VM.
+INTERFACE=ens4
+
+# Local warning/protection thresholds. Values are GiB.
+WARN_GIB=150
+LIMIT_GIB=180
+
+# warn: log only; block: block inbound except SSH; shutdown: power off.
+ACTION=block
+
+# WeCom (企业微信) application message settings.
+# Leave credentials empty to disable notifications.
+QYWX_API_BASE='https://qyapi.weixin.qq.com'
+QYWX_CORP_ID=''
+QYWX_CORP_SECRET=''
+QYWX_AGENT_ID=''
+QYWX_TOUSER='@all'
+QYWX_TITLE='GCP出站流量保护'
+QYWX_PIC_URL=''
+
+# Display name shown in WeCom messages.
+SERVER_NAME='free-tier-vm'
+
+# Display/progress-bar quota. Protection still uses LIMIT_GIB.
+QUOTA_GIB=200
+
+# Google Cloud monthly meter boundary. Set this to match your billing account.
+GCP_BILLING_TZ='America/Los_Angeles'

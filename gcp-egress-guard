@@ -1,0 +1,272 @@
+#!/bin/bash
+set -Eeuo pipefail
+
+CONFIG=/etc/default/gcp-egress-guard
+STATE_DIR=/var/lib/gcp-egress-guard
+STATE_FILE="$STATE_DIR/state"
+STATE_TMP="$STATE_DIR/.state.$$"
+LOCK_FILE=/run/gcp-egress-guard.lock
+LOG_TAG=gcp-egress-guard
+
+[[ -r "$CONFIG" ]] && . "$CONFIG"
+INTERFACE="${INTERFACE:-ens4}"
+LIMIT_GIB="${LIMIT_GIB:-180}"
+WARN_GIB="${WARN_GIB:-150}"
+ACTION="${ACTION:-shutdown}"
+GUARD_CHAIN=GCP_EGRESS_GUARD
+QYWX_API_BASE="${QYWX_API_BASE:-https://qyapi.weixin.qq.com}"
+QYWX_CORP_ID="${QYWX_CORP_ID:-}"
+QYWX_CORP_SECRET="${QYWX_CORP_SECRET:-}"
+QYWX_AGENT_ID="${QYWX_AGENT_ID:-}"
+QYWX_TOUSER="${QYWX_TOUSER:-@all}"
+QYWX_TITLE="${QYWX_TITLE:-GCP 出站流量保护}"
+QYWX_PIC_URL="${QYWX_PIC_URL:-}"
+SERVER_NAME="${SERVER_NAME:-}"
+QUOTA_GIB="${QUOTA_GIB:-200}"
+GCP_BILLING_TZ="${GCP_BILLING_TZ:-America/Los_Angeles}"
+
+die() { logger -t "$LOG_TAG" -p user.err -- "$*" || true; echo "ERROR: $*" >&2; exit 1; }
+info() { logger -t "$LOG_TAG" -- "$*" || true; }
+trap 'rm -f "$STATE_TMP"' EXIT
+
+send_qywx() {
+    local title="$1"
+    local message="$2"
+    local progress_gib="${3:-0}"
+    local status="${4:-正常}"
+    # Call sites use readable \n separators; convert them to real newlines
+    # before building the JSON payload.
+    message=${message//\\n/$'\n'}
+    QYWX_LAST_STATUS=0
+    [[ -n "$QYWX_CORP_ID" && -n "$QYWX_CORP_SECRET" && -n "$QYWX_AGENT_ID" ]] || return 0
+    command -v curl >/dev/null 2>&1 || { info "企业微信通知跳过：curl 不存在"; QYWX_LAST_STATUS=1; return 0; }
+    local token_response access_token payload response errcode
+    token_response=$(curl -fsS --connect-timeout 5 --max-time 10 --get \
+        --data-urlencode "corpid=$QYWX_CORP_ID" \
+        --data-urlencode "corpsecret=$QYWX_CORP_SECRET" \
+        "$QYWX_API_BASE/cgi-bin/gettoken" 2>/dev/null) || {
+        info "企业微信通知失败：获取 access_token 请求失败"
+        QYWX_LAST_STATUS=1
+        return 0
+    }
+    access_token=$(printf '%s' "$token_response" | python3 -c \
+        'import json,sys; print(json.load(sys.stdin).get("access_token", ""))' 2>/dev/null) || access_token=
+    [[ -n "$access_token" ]] || { info "企业微信通知失败：获取 access_token 失败"; QYWX_LAST_STATUS=1; return 0; }
+    local public_ip zone instance_name
+    public_ip=$(curl -fsS --connect-timeout 3 --max-time 5 -H 'Metadata-Flavor: Google' \
+        'http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip' 2>/dev/null || printf '%s' '-')
+    zone=$(curl -fsS --connect-timeout 3 --max-time 5 -H 'Metadata-Flavor: Google' \
+        'http://metadata.google.internal/computeMetadata/v1/instance/zone' 2>/dev/null || printf '%s' '-')
+    zone="${zone##*/}"
+    instance_name="${SERVER_NAME:-}"
+    [[ -n "$instance_name" ]] || instance_name=$(curl -fsS --connect-timeout 3 --max-time 5 -H 'Metadata-Flavor: Google' \
+        'http://metadata.google.internal/computeMetadata/v1/instance/name' 2>/dev/null || hostname)
+    payload=$(python3 - "$title" "$message" "$QYWX_TOUSER" "$QYWX_AGENT_ID" "$QYWX_PIC_URL" "$progress_gib" "$QUOTA_GIB" "$instance_name" "$public_ip" "$zone" "$status" <<'PY'
+import json, sys
+title, message, touser, agentid, picurl, value, limit, instance, public_ip, zone, status = sys.argv[1:]
+try:
+    pct = max(0, min(100, float(value) / float(limit) * 100))
+except (ValueError, ZeroDivisionError):
+    pct = 0
+progress = int(pct + 0.5)
+filled = min(20, int(0.5 + (20 * progress) / 100))
+if 95 < progress < 100:
+    filled = 19
+bar = "■" * filled + "□" * (20 - filled)
+try:
+    traffic = f"{float(value):.2f}GB"
+except ValueError:
+    traffic = "0.00GB"
+full_title = f"已使用{traffic} - {title}"
+description = (
+    f"{instance}（{public_ip}）\n"
+    f"{bar} {pct:.2f}%\n"
+    f"已使用流量: {traffic} / {float(limit):g}GB\n"
+    f"实例地区: {zone}\n"
+    f"实例ID: {instance}\n"
+    f"入站状态: {status}\n"
+    f"{message}"
+)
+print(json.dumps({"touser": touser, "msgtype": "news", "agentid": int(agentid), "news": {"articles": [{"title": full_title, "description": description[:512], "url": "", "picurl": picurl}]}, "enable_id_trans": 0, "enable_duplicate_check": 0, "duplicate_check_interval": 1800}, ensure_ascii=False))
+PY
+    ) || { info "企业微信通知失败：无法生成 JSON"; QYWX_LAST_STATUS=1; return 0; }
+    response=$(curl -fsS --connect-timeout 5 --max-time 10 \
+        -H 'Content-Type: application/json' --data "$payload" \
+        "$QYWX_API_BASE/cgi-bin/message/send?access_token=$access_token" 2>/dev/null) || {
+        info "企业微信通知失败：应用消息请求失败"
+        QYWX_LAST_STATUS=1
+        return 0
+    }
+    errcode=$(printf '%s' "$response" | sed -n 's/.*"errcode"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')
+    if [[ "$errcode" != 0 ]]; then
+        info "企业微信通知失败：errcode=${errcode:-unknown}"
+        QYWX_LAST_STATUS=1
+    else
+        info "企业微信应用消息发送成功"
+    fi
+    return 0
+}
+
+if [[ "${1:-}" == "--test-notification" ]]; then
+    send_qywx "$QYWX_TITLE" "这是一条企业微信应用消息测试通知\n时间：$(date -u '+%Y-%m-%d %H:%M:%S UTC')" 0 "测试"
+    if [[ "${QYWX_LAST_STATUS:-0}" == 1 ]]; then
+        echo "企业微信应用消息测试失败，请查看：journalctl -t gcp-egress-guard -n 10" >&2
+        exit 1
+    fi
+    echo "企业微信应用消息测试请求成功，请在企业微信中确认收到消息。"
+    exit 0
+fi
+
+[[ $EUID -eq 0 ]] || die "must run as root"
+[[ "$INTERFACE" =~ ^[A-Za-z0-9_.:-]+$ ]] || die "invalid interface"
+[[ -r "/sys/class/net/$INTERFACE/statistics/tx_bytes" ]] || die "interface not found: $INTERFACE"
+[[ "$LIMIT_GIB" =~ ^[0-9]+([.][0-9]+)?$ ]] || die "invalid LIMIT_GIB"
+[[ "$WARN_GIB" =~ ^[0-9]+([.][0-9]+)?$ ]] || die "invalid WARN_GIB"
+[[ "$ACTION" == warn || "$ACTION" == block || "$ACTION" == shutdown ]] || die "ACTION must be warn, block or shutdown"
+
+remove_inbound_block() {
+    command -v iptables >/dev/null 2>&1 || return 0
+    while iptables -C INPUT -j "$GUARD_CHAIN" 2>/dev/null; do
+        iptables -D INPUT -j "$GUARD_CHAIN" || break
+    done
+    iptables -F "$GUARD_CHAIN" 2>/dev/null || true
+    iptables -X "$GUARD_CHAIN" 2>/dev/null || true
+}
+
+apply_inbound_block() {
+    command -v iptables >/dev/null 2>&1 || die "iptables is required for ACTION=block"
+    iptables -N "$GUARD_CHAIN" 2>/dev/null || true
+    iptables -F "$GUARD_CHAIN"
+    iptables -A "$GUARD_CHAIN" -i lo -j RETURN
+    iptables -A "$GUARD_CHAIN" -p tcp --dport 22 -j RETURN
+    iptables -A "$GUARD_CHAIN" -j DROP
+    if ! iptables -C INPUT -j "$GUARD_CHAIN" 2>/dev/null; then
+        iptables -I INPUT 1 -j "$GUARD_CHAIN"
+    fi
+}
+
+mkdir -p "$STATE_DIR"
+chmod 700 "$STATE_DIR"
+exec 9>"$LOCK_FILE"
+flock -n 9 || exit 0
+
+if ! TZ="$GCP_BILLING_TZ" date '+%Y-%m' >/dev/null 2>&1; then
+    die "invalid GCP_BILLING_TZ: $GCP_BILLING_TZ"
+fi
+month=$(TZ="$GCP_BILLING_TZ" date +%Y-%m)
+now_tx=$(cat "/sys/class/net/$INTERFACE/statistics/tx_bytes")
+[[ "$now_tx" =~ ^[0-9]+$ ]] || die "invalid tx_bytes value"
+
+old_month=
+total=0
+last_tx=0
+triggered=0
+warn_notified=0
+notify_15_key=
+notify_20_key=
+notify_25_key=
+if [[ -r "$STATE_FILE" ]]; then
+    # shellcheck disable=SC1090
+    . "$STATE_FILE" || true
+fi
+
+if [[ "${old_month:-}" != "$month" ]]; then
+    previous_month="${old_month:-}"
+    if [[ "${old_month:-}" != "" && "${triggered:-0}" == 1 ]]; then
+        remove_inbound_block
+        info "new month detected; inbound protection removed"
+        send_qywx "入站保护已解除" "新月份：$month\n已自动解除入站保护，SSH 之外的入站连接恢复" 0 "已解除"
+    fi
+    old_month=$month
+    total=0
+    last_tx=$now_tx
+    triggered=0
+    warn_notified=0
+    notify_15_key=
+    notify_20_key=
+elif [[ "${last_tx:-0}" =~ ^[0-9]+$ && "$now_tx" -ge "${last_tx:-0}" ]]; then
+    total=$(( ${total:-0} + now_tx - last_tx ))
+else
+    total=$(( ${total:-0} + now_tx ))
+    info "TX counter reset detected; continuing from current counter"
+fi
+
+# Calculate the current monthly value.
+total_gib=$(awk -v n="$total" 'BEGIN { printf "%.2f", n/1073741824 }')
+
+cat > "$STATE_TMP" <<EOF
+old_month='$month'
+total='$total'
+last_tx='$now_tx'
+triggered='${triggered:-0}'
+warn_notified='${warn_notified:-0}'
+notify_15_key='${notify_15_key:-}'
+notify_20_key='${notify_20_key:-}'
+notify_25_key='${notify_25_key:-}'
+EOF
+chmod 600 "$STATE_TMP"
+mv -f "$STATE_TMP" "$STATE_FILE"
+
+info "interface=$INTERFACE month=$month tx_gib=$total_gib warn_gib=$WARN_GIB limit_gib=$LIMIT_GIB action=$ACTION"
+
+# Monthly reminders at 10:00 Asia/Shanghai on the 15th, 20th and 25th.
+beijing_date=$(TZ=Asia/Shanghai date +%Y-%m-%d)
+beijing_day=$(TZ=Asia/Shanghai date +%d)
+beijing_hour=$(TZ=Asia/Shanghai date +%H)
+inbound_status=正常
+[[ "${triggered:-0}" == 1 ]] && inbound_status=已限制
+if [[ "$beijing_hour" == 10 ]]; then
+    case "$beijing_day" in
+        15)
+            if [[ "${notify_15_key:-}" != "$beijing_date" ]]; then
+                send_qywx "月度流量提醒（15日）" "月份：$month\n提醒日期：$beijing_date\n统计时间：北京时间 10:00\n当前月累计流量：${total_gib} GiB" "$total_gib" "$inbound_status"
+                [[ "${QYWX_LAST_STATUS:-0}" == 0 ]] && notify_15_key=$beijing_date
+            fi ;;
+        20)
+            if [[ "${notify_20_key:-}" != "$beijing_date" ]]; then
+                send_qywx "月度流量提醒（20日）" "月份：$month\n提醒日期：$beijing_date\n统计时间：北京时间 10:00\n当前月累计流量：${total_gib} GiB" "$total_gib" "$inbound_status"
+                [[ "${QYWX_LAST_STATUS:-0}" == 0 ]] && notify_20_key=$beijing_date
+            fi ;;
+        25)
+            if [[ "${notify_25_key:-}" != "$beijing_date" ]]; then
+                send_qywx "月度流量提醒（25日）" "月份：$month\n提醒日期：$beijing_date\n统计时间：北京时间 10:00\n当前月累计流量：${total_gib} GiB" "$total_gib" "$inbound_status"
+                [[ "${QYWX_LAST_STATUS:-0}" == 0 ]] && notify_25_key=$beijing_date
+            fi ;;
+    esac
+fi
+
+cat > "$STATE_TMP" <<EOF
+old_month='$month'
+total='$total'
+last_tx='$now_tx'
+triggered='${triggered:-0}'
+warn_notified='${warn_notified:-0}'
+notify_15_key='${notify_15_key:-}'
+notify_20_key='${notify_20_key:-}'
+notify_25_key='${notify_25_key:-}'
+EOF
+chmod 600 "$STATE_TMP"
+mv -f "$STATE_TMP" "$STATE_FILE"
+
+if awk -v n="$total_gib" -v w="$WARN_GIB" 'BEGIN { exit !(n >= w) }'; then
+    logger -t "$LOG_TAG" -p user.warning -- "monthly egress reached ${total_gib} GiB (warning threshold ${WARN_GIB} GiB)" || true
+    if [[ "${warn_notified:-0}" != 1 ]]; then
+        send_qywx "流量告警" "月份：$month\n告警阈值：${WARN_GIB} GiB\n保护阈值：${LIMIT_GIB} GiB" "$total_gib" "告警"
+        sed -i "s/^warn_notified=.*/warn_notified='1'/" "$STATE_FILE"
+    fi
+fi
+
+if [[ "${triggered:-0}" == 1 && "$ACTION" == block ]]; then
+    apply_inbound_block
+fi
+
+if [[ "${triggered:-0}" != 1 ]] && awk -v n="$total_gib" -v l="$LIMIT_GIB" 'BEGIN { exit !(n >= l) }'; then
+    sed -i "s/^triggered=.*/triggered='1'/" "$STATE_FILE"
+    info "monthly egress limit reached: ${total_gib} GiB; action=$ACTION"
+    send_qywx "流量保护已触发" "月份：$month\n已达到保护阈值：${LIMIT_GIB} GiB\n动作：关闭除 SSH 外的入站连接" "$total_gib" "已限制"
+    if [[ "$ACTION" == block ]]; then
+        apply_inbound_block
+    elif [[ "$ACTION" == shutdown ]]; then
+        systemctl --no-block poweroff
+    fi
+fi

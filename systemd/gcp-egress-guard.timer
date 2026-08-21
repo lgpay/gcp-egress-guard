@@ -1,0 +1,11 @@
+[Unit]
+Description=Run monthly Google Cloud egress guard every five minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Persistent=true
+
+[Install]
+WantedBy=timers.target
